@@ -4,7 +4,10 @@ import plotly.express as px
 import re 
 from techissuelist import techissues
 from largedatasetreader import parallel_read_csv
+from largedatasetreader import process_game
+from concurrent.futures import ThreadPoolExecutor as te
 import gc
+
 '''We are going to be looking at steam game reviews and processing the data '''
 title_counter = 0
 game_titles = []
@@ -27,57 +30,64 @@ if __name__ == '__main__':
             game_titles.append(i)
         
 
-#look reviews and determin sentiments 
-    good_keywords = "c:/Users/stray/Desktop/portfolioDatasets/datasets/wordlists/positive words.csv"
-    bad_keywords = "c:/Users/stray/Desktop/portfolioDatasets/datasets/wordlists/archive/negative-words.txt"
+#look reviews and determin sentiments
+with open("c:/Users/stray/Desktop/game_reviews_wordlist/positive_sentiment_words.txt", "r") as f:
+   good_keywords = [line.strip() for line in f.readlines()]
+
+#load bad wordlist
+with open("c:/Users/stray/Desktop/game_reviews_wordlist/negative_sentiment_words.txt","r") as f:
+    bad_keywords = [line.strip() for line in f.readlines()]
 #define bad keyword lists
     game_sentiment = {}
 
-
-
-#Display each game and their avg sentiment score
-for game, sentiments in game_sentiment.items():
-    print(f"\n{game}: {sentiments}\n")
-
 #testing this function
 #sentiment analysis function that will store game title and sentiment score in a dict for graph 
-def analyze_review(dataframe):
-    game_scores = {}
-    chunk_size = 20 #process 20 titles at a time 
+#testing this function
+#sentiment analysis function that will store game title and sentiment score in a dict for graph 
+def analyze_review(dataframe, game_titles):
+    game_scores = {title: {"Good": 0, "Bad": 0} for title in game_titles}
+    chunk_size = 100000 #process 20 titles at a time
 
-    #group by app_name
-    grouped = dataframe.groupby("app_name")
-    # Process reviews one at a time
-    for game_name,game_data in grouped:
-        game_scores[game_name] = {"Good": 0, "Bad": 0}
+    #set regex search filters
+    good_patern = re.compile(r'\b(?:' + '|'.join(map(re.escape, good_keywords)) + r')\b', re.IGNORECASE) 
+    bad_patern = re.compile(r'\b(?:' + '|'.join(map(re.escape, bad_keywords)) + r')\b', re.IGNORECASE)
+
+    with te() as executor:
+        executor.map(lambda game: process_game(game, dataframe, game_scores, good_patern, bad_patern, chunk_size), game_titles)
+
     
-    #process this games reviews in chunks
-    for chunk_start in range(0,len(game_data),chunk_size):
-        chunk_end = chunk_start + chunk_size
-        chunk = game_data.iloc[chunk_start:chunk_end]
-
-        #process reviews for current chunk 
-        for col, row in chunk.iterrows():
-            game = row["app_name"]
-            review = str(row["review"]).lower()
-
-
-        # Count scores for this review
-            good_count = sum(1 for word in review.split() if word in good_keywords)
-            bad_count = sum(1 for word in review.split() if word in bad_keywords)
-        
-        # Add to game's total
-            game_scores[game]["Good"] += good_count
-            game_scores[game]["Bad"] += bad_count
-        del chunk
-        gc.collect()
     return game_scores
+#calculate sentiment percent for each game
+def calculate_percents(game_scores):
+     sentiment_results = {}
+
+     for game, scores in game_scores.items():
+          total_reviews = scores["Good"] + scores["Bad"]
+
+          if total_reviews > 0:
+               sentiment_score = (scores["Good"] - scores["Bad"]) / total_reviews
+               sentiment_results[game] = {
+                    "Sentiment Score": round(sentiment_score, 2),
+                    "Good": scores["Good"],
+                    "Bad": scores["Bad"]
+               }
+          else:
+               sentiment_results[game] = {
+                    "Sentiment Score": 0,
+                    "Good": scores["Good"],
+                    "Bad": scores["Bad"]
+               }
+     return sentiment_results
 
 # Usage:
-game_sentiment = analyze_review(dataframe)
+game_sentiment = analyze_review(dataframe,game_titles)
 games = list(game_sentiment.keys())
 good_reviews = [game_sentiment[game]["Good"] for game in games]
 bad_reviews = [game_sentiment[game]["Bad"] for game in games]
+
+#call calculate_percents function and store the results 
+sentiment_scores = calculate_percents(game_sentiment)
+sentiment_values = [sentiment_scores[game]["Sentiment Score"] for game in games]
 
 
 #create the graphs 
